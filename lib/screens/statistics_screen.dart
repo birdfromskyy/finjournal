@@ -11,6 +11,8 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   List<Map<String, dynamic>> _transactions = [];
   bool _showIncome = true;
   String _searchQuery = '';
+  DateTime? _startDate;
+  DateTime? _endDate;
 
   @override
   void initState() {
@@ -35,6 +37,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
         children: [
           _buildDropdown(),
           _buildSearchField(),
+          _buildDateRangePicker(),
           Expanded(
             child: _buildTransactionList(),
           ),
@@ -84,6 +87,47 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
     );
   }
 
+  Widget _buildDateRangePicker() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+      child: Row(
+        children: [
+          ElevatedButton(
+            onPressed: () => _selectDate(context, true),
+            child: Text(_startDate == null
+                ? 'Начальная дата'
+                : 'С: ${_startDate!.toLocal()}'.split(' ')[0]),
+          ),
+          SizedBox(width: 8),
+          ElevatedButton(
+            onPressed: () => _selectDate(context, false),
+            child: Text(_endDate == null
+                ? 'Конечная дата'
+                : 'По: ${_endDate!.toLocal()}'.split(' ')[0]),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _selectDate(BuildContext context, bool isStartDate) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2101),
+    );
+    if (picked != null) {
+      setState(() {
+        if (isStartDate) {
+          _startDate = picked;
+        } else {
+          _endDate = picked;
+        }
+      });
+    }
+  }
+
   Widget _buildTransactionList() {
     final filteredTransactions = _transactions.where((transaction) {
       final matchesType = transaction['isIncome'] == _showIncome;
@@ -91,7 +135,15 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       final name = transaction['name']?.toLowerCase() ?? '';
       final matchesQuery =
           category.contains(_searchQuery) || name.contains(_searchQuery);
-      return matchesType && matchesQuery;
+
+      final transactionDate = DateTime.parse(transaction['date']);
+      final matchesDate = (_startDate == null ||
+              transactionDate
+                  .isAfter(_startDate!.subtract(Duration(days: 1)))) &&
+          (_endDate == null ||
+              transactionDate.isBefore(_endDate!.add(Duration(days: 1))));
+
+      return matchesType && matchesQuery && matchesDate;
     }).toList();
 
     return ListView.builder(
@@ -137,7 +189,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
     final TextEditingController _amountController =
         TextEditingController(text: transaction['amount'].toString());
     DateTime _selectedDate = DateTime.parse(transaction['date']);
-
+    final double oldAmount = transaction['amount'];
     showDialog(
       context: context,
       builder: (context) {
@@ -189,15 +241,20 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
                 ),
                 TextButton(
                   onPressed: () async {
+                    final double newAmount =
+                        double.tryParse(_amountController.text) ?? oldAmount;
+                    final double adjustment = newAmount - oldAmount;
+                    final isIncome = transaction['isIncome'];
                     setState(() {
                       transaction['name'] = _nameController.text;
-                      transaction['amount'] =
-                          double.tryParse(_amountController.text) ??
-                              transaction['amount'];
+                      transaction['amount'] = newAmount;
                       transaction['date'] = _selectedDate.toIso8601String();
                     });
                     await SharedPreferencesService.saveTransactions(
                         _transactions);
+                    final balanceAdjustment =
+                        isIncome ? adjustment : -adjustment;
+                    await BalanceManager.updateBalance(balanceAdjustment);
                     Navigator.pop(context);
                   },
                   child: Text('Сохранить'),
